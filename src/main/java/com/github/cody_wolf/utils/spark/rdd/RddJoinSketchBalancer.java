@@ -4,7 +4,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterators;
 import com.google.protobuf.InvalidProtocolBufferException;
 import lombok.Builder;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.Optional;
@@ -28,7 +27,7 @@ public class RddJoinSketchBalancer implements Serializable {
     public static final float DEFAULT_BALANCE_TARGET = 0.25f;
     public static final boolean DEFAULT_ENABLE_CACHE = false;
     public static final String DEFAULT_KEY_SPLIT_TAG = "#RJSB";
-    private static final Random RANDOM = new Random();
+    private static final Random RANDOM = new Random(System.currentTimeMillis());
 
     @Builder.Default
     private final int sketchMaxSize = DEFAULT_SKETCH_MAX_SIZE;
@@ -247,22 +246,8 @@ public class RddJoinSketchBalancer implements Serializable {
      * @param rightName Using cached sketched result for balancing.
      */
     public <V, W> JavaPairRDD<String, Tuple2<V, Optional<W>>> leftOuterJoin(JavaPairRDD<String, V> left, String leftName, JavaPairRDD<String, W> right, String rightName) {
-        JavaPairRDD<String, V> leftBalanced = left;
-        JavaPairRDD<String, W> rightBalanced = right;
-
-        if (rdd2keyScores.containsKey(leftName)) {
-            log.info("Balancing RDD for join. flatten = {}, expand = {}", leftName, rightName);
-            leftBalanced = flatten(leftBalanced, rdd2keyScores.get(leftName), keySplitTag + "&left");
-            rightBalanced = expand(rightBalanced, rdd2keyScores.get(leftName), keySplitTag + "&left");
-        }
-
-        if (rdd2keyScores.containsKey(rightName)) {
-            log.info("Balancing RDD for join. flatten = {}, expand = {}", rightName, leftName);
-            leftBalanced = expand(leftBalanced, rdd2keyScores.get(rightName), keySplitTag + "&right");
-            rightBalanced = flatten(rightBalanced, rdd2keyScores.get(rightName), keySplitTag + "&right");
-        }
-
-        JavaPairRDD<String, Tuple2<V, Optional<W>>> result = leftBalanced.leftOuterJoin(rightBalanced);
+        Tuple2<JavaPairRDD<String, V> , JavaPairRDD<String, W>> balancedRDD = balanceJoinRDDs(left, leftName, right, rightName);
+        JavaPairRDD<String, Tuple2<V, Optional<W>>> result = balancedRDD._1().leftOuterJoin(balancedRDD._2());
 
         if (rdd2keyScores.containsKey(rightName)) {
             result = result.filter(tuple2 -> tuple2._2()._2().isPresent() || !tuple2._1().contains(keySplitTag + "&right"));
@@ -278,6 +263,24 @@ public class RddJoinSketchBalancer implements Serializable {
 
             return Tuple2.apply(originalKey, tuple2._2());
         });
+    }
 
+    <V, W> Tuple2<JavaPairRDD<String, V> , JavaPairRDD<String, W>> balanceJoinRDDs(JavaPairRDD<String, V> left, String leftName, JavaPairRDD<String, W> right, String rightName) {
+        JavaPairRDD<String, V> leftBalanced = left;
+        JavaPairRDD<String, W> rightBalanced = right;
+
+        if (rdd2keyScores.containsKey(leftName)) {
+            log.info("Balancing RDD for join. flatten = {}, expand = {}", leftName, rightName);
+            leftBalanced = flatten(leftBalanced, rdd2keyScores.get(leftName), keySplitTag + "&left");
+            rightBalanced = expand(rightBalanced, rdd2keyScores.get(leftName), keySplitTag + "&left");
+        }
+
+        if (rdd2keyScores.containsKey(rightName)) {
+            log.info("Balancing RDD for join. flatten = {}, expand = {}", rightName, leftName);
+            leftBalanced = expand(leftBalanced, rdd2keyScores.get(rightName), keySplitTag + "&right");
+            rightBalanced = flatten(rightBalanced, rdd2keyScores.get(rightName), keySplitTag + "&right");
+        }
+
+        return Tuple2.apply(leftBalanced, rightBalanced);
     }
 }
