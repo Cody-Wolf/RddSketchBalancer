@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+option java_package = "com.github.cody_wolf.utils.spark.rdd";
+option java_multiple_files = true;
+
+message SketchInfo {
+  int64 partition_size = 1;
+  map<string, int64> sketched_key_count = 2;
+}
